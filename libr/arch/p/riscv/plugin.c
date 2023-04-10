@@ -34,7 +34,7 @@ static bool riscv_encode(RArchSession *s, RAnalOp *op, RArchEncodeMask mask) {
 	return false;
 }
 
-#define is_any(...) _is_any(o->name, __VA_ARGS__, NULL)
+#define is_any(...) _is_any(name, __VA_ARGS__, NULL)
 static bool _is_any(const char *str, ...) {
 	char *cur;
 	va_list va;
@@ -44,7 +44,7 @@ static bool _is_any(const char *str, ...) {
 		if (!cur) {
 			break;
 		}
-		if (!strcmp (str, cur)) {
+		if (r_str_startswith (str, cur)) {
 			va_end (va);
 			return true;
 		}
@@ -381,7 +381,7 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 	if (!o || !o->name) {
 		return op->size;
 	}
-	if (mask & R_ARCH_OP_MASK_DISASM) {
+	if (true) { // necessary for analysis // mask & R_ARCH_OP_MASK_DISASM) {
 		op->mnemonic = riscv_disassemble (s, addr, buf, len);
 		if (!op->mnemonic) {
 			op->mnemonic = strdup ("invalid");
@@ -405,11 +405,16 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 		return false;
 	}
 
-	if (o->args) {
-		const char *name = o->name;
+	const char *name = o->name;
+	if (op->mnemonic) {
+		name = op->mnemonic;
+		// free (o->name);
+		// o->name = strdup (name);
+	}
+	if (mask & R_ARCH_OP_MASK_ESIL) {
 		// Test for compressed instruction
 		if (r_str_startswith (o->name, "c.")) {
-			name += 2;
+			// name += 2;
 			op->size = 2;
 		} else {
 			op->size = 4;
@@ -417,7 +422,7 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 #define ARG(x) (arg_n (&args, (x)))
 		get_riscv_args (&args, o->args, word, addr);
 		//get_insn_args (&args, o->args, word, addr);
-		if (!strcmp (name, "nop")) {
+		if (is_any ("nop")) {
 			esilprintf (op, ",");
 		}
 		// math
@@ -427,6 +432,9 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 				op->stackop = R_ANAL_STACK_INC;
 				op->stackptr = r_num_math (NULL, ARG (1));
 			}
+		} else if (is_any ("ret")) {
+			esilprintf (op, "ra,pc,:=");
+			op->type = R_ANAL_OP_TYPE_RET;
 		} else if (r_str_startswith (name, "addiw")) {
 			r_strbuf_appendf (&op->esil, "%s,0xffffffff,%s,&,", ARG (2), ARG (1));
 			r_strbuf_appendf (&op->esil, "+,%s,=,", ARG (0));
@@ -484,22 +492,23 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 			if (name[3] == 'w' || !strncmp (name, "slliw", 5)) {
 				r_strbuf_appendf (&op->esil, ",32,%s,~=", ARG (0));
 			}
-		} else if (!strcmp (name, "srlw") || !strcmp (name, "srliw")) {
+		} else if (is_any ("srlw", "srliw")) {
 			esilprintf (op, "%s,0xffffffff,%s,&,>>,%s,=", ARG (2), ARG (1), ARG (0));
 		} else if (r_str_startswith (name, "srl")) {
 			esilprintf (op, "%s,%s,>>,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "sraiw")) {
+		} else if (is_any ("sraiw")) {
 			esilprintf (op, "%s,%s,>>>>,%s,=,", ARG (2), ARG (1), ARG (0));
 			r_strbuf_appendf (&op->esil, "%s,64,-,%s,~=", ARG (2), ARG(0));
 		} else if (r_str_startswith (name, "sra")) {
 			esilprintf (op, "%s,%s,>>>>,%s,=", ARG (2), ARG (1), ARG (0));
 		}
 		// assigns
-		else if (!strcmp (name, "mv")) {
+		else if (r_str_startswith (name, "mv")) {
 			esilprintf (op, "%s,%s,=", ARG (1), ARG (0));
-		} else if (!strcmp (name, "li")) {
+			op->type = R_ANAL_OP_TYPE_MOV;
+		} else if (r_str_startswith (name, "li")) {
 			esilprintf (op, "%s,%s,=", ARG (1), ARG (0));
-		} else if (!strcmp (name, "lui")) {
+		} else if (r_str_startswith (name, "lui")) {
 			esilprintf (op, "%s000,%s,=", ARG (1), ARG (0));
 			if (s->config->bits == 64) {
 				r_strbuf_appendf (&op->esil, ",32,%s,~=", ARG (0));
@@ -517,113 +526,113 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 			esilprintf (op, "%s,0,+,%s,1,+,0,-,%s,&=,%s,=", ARG (1), ARG (1), ARG (2), ARG (0));
 		}
 		// stores
-		else if (!strcmp (name, "sd") || !strcmp (name, "sdsp")) {
+		else if (is_any ("sd ", "sdsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[8]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "sw") || !strcmp (name, "swsp")) {
+		} else if (is_any ("sw ", "swsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[4]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "sh") || !strcmp (name, "shsp")) {
+		} else if (is_any ("sh ", "shsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[2]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "sb") || !strcmp (name, "sbsp")) {
+		} else if (is_any ("sb ", "sbsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[1]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "fsq") || !strcmp (name, "fsqsp")) {
+		} else if (is_any ("fsq ", "fsqsp")) {
 			esilprintf (op, "%s,%s,+,[16],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "fsd") || !strcmp (name, "fsdsp")) {
+		} else if (is_any ("fsd ", "fsdsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[8]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "fsw") || !strcmp (name, "fswsp")) {
+		} else if (is_any ("fsw ", "fswsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[4]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "fsh") || !strcmp (name, "fshsp")) {
+		} else if (is_any ("fsh ", "fshsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[2]", ARG (0), ARG (2), ARG (1));
-		} else if (!strcmp (name, "fsb") || !strcmp (name, "fsbsp")) {
+		} else if (is_any ("fsb ", "fsbsp")) {
 			esilprintf (op, "%s,%s,%s,+,=[1]", ARG (0), ARG (2), ARG (1));
 		}
 		// loads
-		else if (!strcmp (name, "ld") || !strcmp (name, "ldsp")) {
+		else if (is_any ("ld ", "ldsp ")) {
 			esilprintf (op, "%s,%s,+,[8],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "lw") || !strcmp (name, "lwu") || !strcmp (name, "lwsp")) {
+		} else if (is_any ("lw ", "lwu ", "lwsp")) {
 			esilprintf (op, "%s,%s,+,[4],%s,=", ARG (2), ARG (1), ARG (0));
-			if ((s->config->bits == 64) && strcmp (name, "lwu")) {
+			if ((s->config->bits == 64) && is_any ("lwu ")) {
 				r_strbuf_appendf (&op->esil, ",32,%s,~=", ARG (0));
 			}
-		} else if (!strcmp (name, "lh") || !strcmp (name, "lhu") || !strcmp (name, "lhsp")) {
+		} else if (is_any ("lh ", "lhu ", "lhsp")) {
 			esilprintf (op, "%s,%s,+,[2],%s,=", ARG (2), ARG (1), ARG (0));
-			if (strcmp (name, "lwu")) {
+			if (!is_any ("lhu")) {
 				r_strbuf_appendf (&op->esil, ",16,%s,~=", ARG (0));
 			}
-		} else if (!strcmp (name, "lb") || !strcmp (name, "lbu") || !strcmp (name, "lbsp")) {
+		} else if (is_any ("lb ", "lbu ", "lbsp")) {
 			esilprintf (op, "%s,%s,+,[1],%s,=", ARG (2), ARG (1), ARG (0));
-			if (strcmp (name, "lbu")) {
+			if (!is_any ("lbu")) {
 				r_strbuf_appendf (&op->esil, ",8,%s,~=", ARG (0));
 			}
-		} else if (!strcmp (name, "flq") || !strcmp (name, "flqsp")) {
+		} else if (is_any ("lfq ", "lfqsp")) {
 			esilprintf (op, "%s,%s,+,[16],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "fld") || !strcmp (name, "fldsp")) {
+		} else if (is_any ("lfd ", "lfdsp")) {
 			esilprintf (op, "%s,%s,+,[8],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "flw") || !strcmp (name, "flwsp")) {
+		} else if (is_any ("lfw ", "lfwsp")) {
 			esilprintf (op, "%s,%s,+,[4],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "flh") || !strcmp (name, "flhsp")) {
+		} else if (is_any ("lfh ", "lfhsp")) {
 			esilprintf (op, "%s,%s,+,[2],%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (!strcmp (name, "flb") || !strcmp (name, "flbsp")) {
+		} else if (is_any ("lfb ", "lfbsp")) {
 			esilprintf (op, "%s,%s,+,[1],%s,=", ARG (2), ARG (1), ARG (0));
 		}
 		// jumps
-		else if (!strcmp (name, "jalr")) {
+		else if (is_any ("jalr")) {
 			if (strcmp (ARG (0), "0")) {
 				esilprintf (op, "%s,%s,+,pc,:=,0x%"PFMT64x",%s,=", ARG (2), ARG (1), addr + op->size, ARG (0));
 			} else {
 				esilprintf (op, "%s,%s,+,pc,:=", ARG (2), ARG (1));
 			}
-		} else if (!strcmp (name, "jal")) {
+		} else if (is_any ("jal ")) {
 			if (strcmp (ARG (0), "0")) {
 				if (args.num == 1) {
 					//esilprintf (op, "%d,$$,+,ra,=,%s,pc,:=", op->size, ARG (0));
-					esilprintf (op, "pc,ra,=,%s,pc,:=", ARG (0));
+					esilprintf (op, "pc,ra,:=,%s,pc,:=", ARG (0));
 				} else {
-					esilprintf (op, "0x%"PFMT64x",%s,=,%s,pc,:=", addr + op->size, ARG (0), ARG (1));
+					esilprintf (op, "0x%"PFMT64x",%s,:=,%s,pc,:=", addr + op->size, ARG (0), ARG (1));
 				}
 			} else {
 				esilprintf (op, "%s,pc,:=", ARG (1));
 			}
-		} else if (!strcmp (name, "jr") || !strcmp (name, "j")) {
+		} else if (is_any ("jr ", "j ")) {
 			esilprintf (op, "%s,pc,:=", ARG (0));
-		} else if (!strcmp (name, "ecall") || !strcmp (name, "ebreak")) {
+		} else if (is_any ("ecall", "ebreak")) {
 			esilprintf (op, "TRAP");
 		}
 		// Branches & cmps
-		else if (!strcmp (name, "beq")) {
+		else if (is_any ("beq ")) {
 			esilprintf (op, "%s,%s,==,$z,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "bne")) {
+		} else if (is_any ("bne ")) {
 			esilprintf (op, "%s,%s,==,$z,!,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "ble") || !strcmp (name, "bleu")) {
+		} else if (is_any ("ble ", "bleu")) {
 			esilprintf (op, "%s,%s,<=,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "blt") || !strcmp (name, "bltu")) {
+		} else if (is_any ("blt ", "bltu")) {
 			esilprintf (op, "%s,%s,<,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "bge") || !strcmp (name, "bgeu")) {
+		} else if (is_any ("bge ", "bgeu")) {
 			esilprintf (op, "%s,%s,>=,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "bgt") || !strcmp (name, "bgtu")) {
+		} else if (is_any ("bgt ", "bgtu")) {
 			esilprintf (op, "%s,%s,>,?{,%s,pc,:=,},", ARG (1), ARG (0), ARG (2));
-		} else if (!strcmp (name, "beqz")) {
+		} else if (is_any ("beqz ")) {
 			esilprintf (op, "%s,0,==,$z,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (!strcmp (name, "bnez")) {
+		} else if (is_any ("bnez ")) {
 			esilprintf (op, "%s,0,==,$z,!,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (!strcmp (name, "blez")) {
+		} else if (is_any ("bjez ")) {
 			esilprintf (op, "%s,0,<=,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (!strcmp (name, "bltz")) {
+		} else if (is_any ("bjtz ")) {
 			esilprintf (op, "%s,0,<,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (!strcmp (name, "bgez")) {
+		} else if (is_any ("bjez ")) {
 			esilprintf (op, "%s,0,>=,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (!strcmp (name, "bgtz")) {
+		} else if (is_any ("bgtz ")) {
 			esilprintf (op, "%s,0,>,?{,%s,pc,:=,},", ARG (0), ARG (1));
-		} else if (r_str_startswith (name, "seq")) {
+		} else if (is_any ("seq ")) {
 			esilprintf (op, "%s,%s,==,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (r_str_startswith (name, "sne")) {
+		} else if (is_any ("sne ")) {
 			esilprintf (op, "%s,%s,!=,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (r_str_startswith (name, "sle")) {
+		} else if (is_any ("sle ")) {
 			esilprintf (op, "%s,%s,<=,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (r_str_startswith (name, "slt")) {
+		} else if (is_any ("slt ")) {
 			esilprintf (op, "%s,%s,<,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (r_str_startswith (name, "sge")) {
+		} else if (is_any ("sge ")) {
 			esilprintf (op, "%s,%s,>=,%s,=", ARG (2), ARG (1), ARG (0));
-		} else if (r_str_startswith (name, "sgt")) {
+		} else if (is_any ("sgt ")) {
 			esilprintf (op, "%s,%s,>,%s,=", ARG (2), ARG (1), ARG (0));
 		}
 		// debug
@@ -637,9 +646,12 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 		//}
 #undef ARG
 	}
-
 	// branch/jumps/calls/rets
-	if (is_any ("jal")) {
+	if (is_any ("ret")) {
+		op->type = R_ANAL_OP_TYPE_RET;
+	} else if (is_any ("c.jr")) {
+		op->type = R_ANAL_OP_TYPE_RET;
+	} else if (is_any ("jal", "j ")) {
 		// decide whether it's jump or call
 		int rd = (word >> OP_SH_RD) & OP_MASK_RD;
 		op->type = (rd == 0) ? R_ANAL_OP_TYPE_JMP: R_ANAL_OP_TYPE_CALL;
@@ -649,8 +661,8 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 		op->type = R_ANAL_OP_TYPE_CALL;
 		op->jump = EXTRACT_RVC_IMM (word) + addr;
 		op->fail = addr + op->size;
-	} else if (is_any ("jr")) {
-		op->type = R_ANAL_OP_TYPE_JMP;
+	} else if (is_any ("jr ")) {
+		op->type = R_ANAL_OP_TYPE_RJMP;
 	} else if (is_any ("c.j", "jump")) {
 		op->type = R_ANAL_OP_TYPE_JMP;
 		op->jump = EXTRACT_RVC_J_IMM (word) + addr;
@@ -662,8 +674,6 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 		op->type = R_ANAL_OP_TYPE_RET;
 	} else if (is_any ("c.jalr")) {
 		op->type = R_ANAL_OP_TYPE_UCALL;
-	} else if (is_any ("c.jr")) {
-		op->type = R_ANAL_OP_TYPE_RET;
 	} else if (is_any ("beqz", "beq", "blez", "bgez", "ble",
 				"bleu", "bge", "bgeu", "bltz", "bgtz", "blt", "bltu",
 				"bgt", "bgtu", "bnez", "bne")) {
@@ -675,9 +685,17 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 		op->jump = EXTRACT_RVC_B_IMM (word) + addr;
 		op->fail = addr + op->size;
 		// math
-	} else if (is_any ("addi", "addw", "addiw", "add", "auipc", "c.addi",
+	} else if (is_any ("auipc")) {
+		op->type = R_ANAL_OP_TYPE_LEA;
+	} else if (is_any ("addi", "addw", "addiw", "add", "c.addi",
 				"c.addw", "c.add", "c.addiw", "c.addi4spn", "c.addi16sp")) {
-		op->type = R_ANAL_OP_TYPE_ADD;
+		if (strstr (name, ", zero,")) {
+			op->type = R_ANAL_OP_TYPE_MOV;
+		} else {
+			op->type = R_ANAL_OP_TYPE_ADD;
+		}
+	} else if (is_any ("ret")) {
+		op->type = R_ANAL_OP_TYPE_RET;
 	} else if (is_any ("c.mv", "csrrw", "csrrc", "csrrs")) {
 		op->type = R_ANAL_OP_TYPE_MOV;
 	} else if (is_any ("subi", "subw", "sub", "c.sub", "c.subw")) {
@@ -706,9 +724,11 @@ static bool riscv_decode(RArchSession *s, RAnalOp *op, RArchDecodeMask mask) {
 	} else if (is_any ("sd", "sb", "sh", "sw", "c.sd", "c.sw",
 				"c.swsp", "c.sdsp")) {
 		op->type = R_ANAL_OP_TYPE_STORE;
-	} else if (is_any ("ld", "lw", "lwu", "lui", "li",
+	} else if (is_any ("li", "c.li", "lui", "c.lui")) {
+		op->type = R_ANAL_OP_TYPE_MOV;
+	} else if (is_any ("ld", "lw", "lwu",
 				"lb", "lbu", "lh", "lhu", "la", "lla", "c.ld",
-				"c.lw", "c.lwsp", "c.li", "c.lui")) {
+				"c.lw", "c.lwsp")) {
 		op->type = R_ANAL_OP_TYPE_LOAD;
 	}
 	if (mask & R_ARCH_OP_MASK_VAL && args.num) {
